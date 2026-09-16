@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(26, 115, 232, 0.16), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(34, 211, 238, 0.09), transparent 55%),
+      #0b1220;
+  }
+
+  /* Visible keyboard focus everywhere — required for keyboard navigation. */
+  :focus-visible {
+    outline: 2px solid #63a6ff;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #22304d;
+    border-radius: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-border bg-surface shadow-panel;
+  }
+
+  .field {
+    @apply w-full rounded-md border border-border bg-canvas px-3 py-2 text-sm text-slate-100
+      placeholder:text-slate-500 focus:border-azure-400 focus:outline-none;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium
+      transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-azure-500 text-white hover:bg-azure-400;
+  }
+
+  .btn-ghost {
+    @apply btn border border-border bg-elevated text-slate-200 hover:border-azure-500
+      hover:text-white;
+  }
+
+  .btn-danger {
+    @apply btn border border-danger/40 bg-danger/10 text-red-300 hover:bg-danger/20;
+  }
+
+  .table-cell {
+    @apply px-4 py-3 text-sm;
+  }
+}
+
+@layer utilities {
+  .skeleton {
+    @apply animate-pulse rounded bg-elevated;
+  }
+}

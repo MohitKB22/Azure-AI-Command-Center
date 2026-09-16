@@ -1,0 +1,136 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, staging, production]
+        required: true
+      deploy_infrastructure:
+        description: Run the Bicep deployment before the app
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # OIDC federated credential — no client secret is stored
+  contents: read
+
+jobs:
+  infrastructure:
+    name: Deploy infrastructure
+    if: inputs.deploy_infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Validate the template
+        run: |
+          az deployment group validate \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --template-file infrastructure/bicep/main.bicep \
+            --parameters infrastructure/bicep/params/${{ inputs.environment }}.bicepparam
+
+      - name: What-if
+        run: |
+          az deployment group what-if \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --template-file infrastructure/bicep/main.bicep \
+            --parameters infrastructure/bicep/params/${{ inputs.environment }}.bicepparam
+
+      - name: Deploy
+        run: |
+          az deployment group create \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --template-file infrastructure/bicep/main.bicep \
+            --parameters infrastructure/bicep/params/${{ inputs.environment }}.bicepparam
+
+  application:
+    name: Deploy application
+    runs-on: ubuntu-latest
+    needs: [infrastructure]
+    if: always() && !failure() && !cancelled()
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push images to ACR
+        run: |
+          TAG="${{ github.sha }}"
+          az acr build --registry ${{ vars.ACR_NAME }} \
+            --image azure-ai-command-center-api:$TAG --file apps/api/Dockerfile apps/api
+          az acr build --registry ${{ vars.ACR_NAME }} \
+            --image azure-ai-command-center-web:$TAG \
+            --build-arg VITE_API_BASE_URL=${{ vars.API_BASE_URL }} \
+            --file apps/web/Dockerfile apps/web
+
+      - name: Run database migrations as a one-off job
+        # Migrations run before the new revision takes traffic. Every migration
+        # in this project is additive, so the previous revision keeps working —
+        # that is what makes the rollback below safe.
+        run: |
+          az containerapp job start \
+            --name ${{ vars.MIGRATION_JOB_NAME }} \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --image ${{ vars.ACR_LOGIN_SERVER }}/azure-ai-command-center-api:${{ github.sha }}
+
+      - name: Deploy the API revision
+        run: |
+          az containerapp update \
+            --name ${{ vars.API_CONTAINER_APP }} \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --image ${{ vars.ACR_LOGIN_SERVER }}/azure-ai-command-center-api:${{ github.sha }} \
+            --revision-suffix sha-${GITHUB_SHA::7}
+
+      - name: Deploy the web revision
+        run: |
+          az containerapp update \
+            --name ${{ vars.WEB_CONTAINER_APP }} \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --image ${{ vars.ACR_LOGIN_SERVER }}/azure-ai-command-center-web:${{ github.sha }} \
+            --revision-suffix sha-${GITHUB_SHA::7}
+
+      - name: Health check the new revision
+        id: health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf "${{ vars.API_BASE_URL }}/health/ready" | grep -q '"status":"ready"'; then
+              echo "Healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "New revision never became ready."
+          exit 1
+
+      - name: Roll back on failure
+        if: failure() && steps.health.outcome == 'failure'
+        run: |
+          PREVIOUS=$(az containerapp revision list \
+            --name ${{ vars.API_CONTAINER_APP }} \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --query "[?properties.active].{name:name,created:properties.createdTime}" \
+            --output tsv | sort -k2 | tail -2 | head -1 | cut -f1)
+          echo "Shifting all traffic back to $PREVIOUS"
+          az containerapp ingress traffic set \
+            --name ${{ vars.API_CONTAINER_APP }} \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --revision-weight "$PREVIOUS=100"

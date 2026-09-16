@@ -1,0 +1,47 @@
+# secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.egg-info/
+dist/
+build/
+
+# databases and local artefacts
+*.db
+*.sqlite3
+var/
+apps/api/var/
+
+# node
+node_modules/
+apps/web/dist/
+apps/web/.vite/
+*.tsbuildinfo
+playwright-report/
+test-results/
+
+# editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# terraform / bicep state
+*.tfstate
+*.tfstate.*
+.terraform/
